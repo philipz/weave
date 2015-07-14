@@ -1,0 +1,12 @@
+#!/bin/sh
+
+export COVERAGE=1
+export PERFORMANCE=1
+export NO_SCHEDULER=1
+
+# only run the performance tests in the node #1
+[ $CIRCLE_NODE_INDEX -eq 0 ] || exit 0
+
+cd $SRCDIR/test
+eval $(./gce.sh hosts)
+./run_all.sh *_perf.sh

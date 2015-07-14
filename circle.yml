@@ -52,6 +52,9 @@ test:
     - cd $SRCDIR/test; eval $(./gce.sh hosts); export COVERAGE=true; export PERFORMANCE=true; ./run_all.sh:
         parallel: true
         timeout: 300
+    - $SRCDIR/bin/circleci/do-perf-tests:
+        parallel: true
+        timeout: 300
   post:
     - cd $SRCDIR/test; ./gce.sh destroy:
         parallel: true
