@@ -21,7 +21,7 @@ const (
 	msgRingUpdate
 	msgSpaceRequestDenied
 
-	paxosInterval = time.Second * 5
+	tickInterval  = time.Second * 5
 	MinSubnetSize = 4 // first and last addresses are excluded, so 2 would be too small
 )
 
@@ -53,7 +53,8 @@ type Allocator struct {
 	pendingClaims    []operation                  // held until we know who owns the space
 	gossip           router.Gossip                // our link to the outside world for sending messages
 	paxos            *paxos.Node
-	paxosTicker      *time.Ticker
+	paxosActive      bool
+	ticker           *time.Ticker
 	shuttingDown     bool // to avoid doing any requests while trying to shut down
 	now              func() time.Time
 }
@@ -75,12 +76,14 @@ func NewAllocator(ourName router.PeerName, ourUID router.PeerUID, ourNickname st
 func (alloc *Allocator) Start() {
 	actionChan := make(chan func(), router.ChannelSize)
 	alloc.actionChan = actionChan
+	alloc.ticker = time.NewTicker(tickInterval)
 	go alloc.actorLoop(actionChan)
 }
 
 // Stop makes the actor routine exit, for test purposes ONLY because any
 // calls after this is processed will hang. Async.
 func (alloc *Allocator) Stop() {
+	alloc.ticker.Stop()
 	alloc.actionChan <- nil
 }
 
@@ -460,19 +463,17 @@ func (alloc *Allocator) SetInterfaces(gossip router.Gossip) {
 
 func (alloc *Allocator) actorLoop(actionChan <-chan func()) {
 	for {
-		var tickChan <-chan time.Time
-		if alloc.paxosTicker != nil {
-			tickChan = alloc.paxosTicker.C
-		}
-
 		select {
 		case action := <-actionChan:
 			if action == nil {
 				return
 			}
 			action()
-		case <-tickChan:
-			alloc.propose()
+		case <-alloc.ticker.C:
+			if alloc.paxosActive {
+				alloc.propose()
+			}
+			alloc.tryPendingOps()
 		}
 
 		alloc.assertInvariants()
@@ -484,18 +485,16 @@ func (alloc *Allocator) actorLoop(actionChan <-chan func()) {
 
 // Ensure we are making progress towards an established ring
 func (alloc *Allocator) establishRing() {
-	if !alloc.ring.Empty() || alloc.paxosTicker != nil {
+	if !alloc.ring.Empty() || alloc.paxosActive {
 		return
 	}
 
+	alloc.paxosActive = true
 	alloc.propose()
 	if ok, cons := alloc.paxos.Consensus(); ok {
 		// If the quorum was 1, then proposing immediately
 		// leads to consensus
 		alloc.createRing(cons.Value)
-	} else {
-		// re-try until we get consensus
-		alloc.paxosTicker = time.NewTicker(paxosInterval)
 	}
 }
 
@@ -508,13 +507,9 @@ func (alloc *Allocator) createRing(peers []router.PeerName) {
 
 func (alloc *Allocator) ringUpdated() {
 	// When we have a ring, we don't need paxos any more
-	if alloc.paxos != nil {
+	if alloc.paxosActive {
+		alloc.paxosActive = false
 		alloc.paxos = nil
-
-		if alloc.paxosTicker != nil {
-			alloc.paxosTicker.Stop()
-			alloc.paxosTicker = nil
-		}
 	}
 
 	alloc.space.UpdateRanges(alloc.ring.OwnedRanges())
