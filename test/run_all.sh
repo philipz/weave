@@ -11,6 +11,7 @@ fi
 whitely echo ...ok
 
 TESTS="${@:-$(find . -name '*_test.sh')}"
+[ -n "$PERFORMANCE" ] && TESTS="$TESTS $(find . -name '*_perf.sh')"
 RUNNER_ARGS=""
 
 # If running on circle, use the scheduler to work out what tests to run
