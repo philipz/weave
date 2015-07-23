@@ -67,6 +67,7 @@ weave run           [--with-dns | --without-dns] [<addr> ...]
 weave start         [<addr> ...] <container_id>
 weave attach        [<addr> ...] <container_id>
 weave detach        [<addr> ...] <container_id>
+weave restart       <container_id>
 weave dns-add       <ip_address> [<ip_address> ...] <container_id> [-h <fqdn>]
 weave dns-remove    <ip_address> [<ip_address> ...] <container_id> [-h <fqdn>]
 weave dns-lookup    <unqualified_name>
@@ -733,6 +734,10 @@ with_container_addresses() {
 
 echo_addresses() {
     echo $1 $2 $3
+}
+
+echo_just_ips() {
+    echo $3
 }
 
 peer_args() {
@@ -1498,6 +1503,14 @@ case "$COMMAND" in
             call_weave DELETE /ip/$CONTAINER/${CIDR%/*}
         done
         show_addrs $ALL_CIDRS
+        ;;
+    restart)
+        [ $# -ge 1 ] || usage
+        ALL_CIDRS=$(with_container_addresses echo_just_ips $1)
+        RES=$(docker restart "$1")
+        with_container_netns_or_die $1 attach $ALL_CIDRS
+        when_weave_running with_container_fqdn $1 put_dns_fqdn $ALL_CIDRS
+        echo $RES
         ;;
     dns-add)
         collect_ip_args "$@"
