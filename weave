@@ -1508,6 +1508,10 @@ case "$COMMAND" in
         [ $# -ge 1 ] || usage
         ALL_CIDRS=$(with_container_addresses echo_just_ips $1)
         RES=$(docker restart "$1")
+        CONTAINER=$(container_id $1)
+        for CIDR in $ALL_CIDRS ; do
+            call_weave PUT /ip/$CONTAINER/${CIDR%/*}
+        done
         with_container_netns_or_die $1 attach $ALL_CIDRS
         when_weave_running with_container_fqdn $1 put_dns_fqdn $ALL_CIDRS
         echo $RES
