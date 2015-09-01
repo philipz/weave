@@ -10,6 +10,10 @@ type ContainerObserver interface {
 	ContainerDied(ident string)
 }
 
+type ContainerObserver2 interface {
+	ContainerDestroyed(ident string)
+}
+
 type Client struct {
 	*docker.Client
 }
@@ -44,6 +48,11 @@ func (c *Client) AddObserver(ob ContainerObserver) error {
 			case "die":
 				id := event.ID
 				ob.ContainerDied(id)
+			case "destroy":
+				id := event.ID
+				if ob2, ok := ob.(ContainerObserver2); ok {
+					ob2.ContainerDestroyed(id)
+				}
 			}
 		}
 	}()
