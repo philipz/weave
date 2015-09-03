@@ -24,7 +24,7 @@ func (i *startContainerInterceptor) InterceptResponse(r *http.Response) error {
 		return err
 	}
 
-	cidrs, err := i.proxy.weaveCIDRsFromConfig(container.Config, container.HostConfig)
+	cidrs, err := i.proxy.weaveCIDRsFromConfig(container.HostConfig.NetworkMode, container.Config.Env)
 	if err != nil {
 		Log.Infof("Leaving container %s alone because %s", container.ID, err)
 		return nil

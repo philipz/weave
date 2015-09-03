@@ -22,12 +22,6 @@ var (
 
 type createContainerInterceptor struct{ proxy *Proxy }
 
-type createContainerRequestBody struct {
-	*docker.Config
-	HostConfig *docker.HostConfig `json:"HostConfig,omitempty" yaml:"HostConfig,omitempty"`
-	MacAddress string             `json:"MacAddress,omitempty" yaml:"MacAddress,omitempty"`
-}
-
 // ErrNoSuchImage replaces docker.NoSuchImage, which does not contain the image
 // name, which in turn breaks docker clients post 1.7.0 since they expect the
 // image name to be present in errors.
@@ -40,33 +34,46 @@ func (err *ErrNoSuchImage) Error() string {
 }
 
 func (i *createContainerInterceptor) InterceptRequest(r *http.Request) error {
-	container := createContainerRequestBody{}
+	container := map[string]interface{}{}
 	if err := unmarshalRequestBody(r, &container); err != nil {
 		return err
 	}
 
-	if cidrs, err := i.proxy.weaveCIDRsFromConfig(container.Config, container.HostConfig); err != nil {
+	config, err := lookupObject(container, "Config")
+	if err != nil {
+		return err
+	}
+
+	hostConfig, err := lookupObject(container, "HostConfig")
+	if err != nil {
+		return err
+	}
+
+	networkMode, err := lookupString(hostConfig, "NetworkMode")
+	if err != nil {
+		return err
+	}
+
+	env, err := lookupStringArray(config, "Env")
+	if err != nil {
+		return err
+	}
+
+	if cidrs, err := i.proxy.weaveCIDRsFromConfig(networkMode, env); err != nil {
 		Log.Infof("Leaving container alone because %s", err)
 	} else {
 		Log.Infof("Creating container with WEAVE_CIDR \"%s\"", strings.Join(cidrs, " "))
-		if container.HostConfig == nil {
-			container.HostConfig = &docker.HostConfig{}
-		}
-		if container.Config == nil {
-			container.Config = &docker.Config{}
-		}
-		i.addWeaveWaitVolume(container.HostConfig)
-		if err := i.setWeaveWaitEntrypoint(container.Config); err != nil {
+		if err := i.addWeaveWaitVolume(hostConfig); err != nil {
 			return err
 		}
-		hostname := r.URL.Query().Get("name")
-		if i.proxy.Config.HostnameFromLabel != "" {
-			if labelValue, ok := container.Labels[i.proxy.Config.HostnameFromLabel]; ok {
-				hostname = labelValue
-			}
+		if err := i.setWeaveWaitEntrypoint(container); err != nil {
+			return err
 		}
-		hostname = i.proxy.hostnameMatchRegexp.ReplaceAllString(hostname, i.proxy.HostnameReplacement)
-		if err := i.setWeaveDNS(&container, hostname); err != nil {
+		hostname, err := i.containerHostname(r, container)
+		if err != nil {
+			return err
+		}
+		if err := i.setWeaveDNS(container, hostname); err != nil {
 			return err
 		}
 
@@ -76,48 +83,114 @@ func (i *createContainerInterceptor) InterceptRequest(r *http.Request) error {
 	return nil
 }
 
-func (i *createContainerInterceptor) addWeaveWaitVolume(hostConfig *docker.HostConfig) {
+func (i *createContainerInterceptor) containerHostname(r *http.Request, container map[string]interface{}) (hostname string, err error) {
+	hostname = r.URL.Query().Get("name")
+	if i.proxy.Config.HostnameFromLabel != "" {
+		hostname, err = i.hostnameFromLabel(hostname, container)
+	}
+	hostname = i.proxy.hostnameMatchRegexp.ReplaceAllString(hostname, i.proxy.HostnameReplacement)
+	return
+}
+
+func (i *createContainerInterceptor) hostnameFromLabel(hostname string, container map[string]interface{}) (string, error) {
+	labels, err := lookupObject(container, "Labels")
+	if err != nil {
+		return "", err
+	}
+
+	labelIface, ok := labels[i.proxy.Config.HostnameFromLabel]
+	if !ok || labelIface == nil {
+		return hostname, nil
+	}
+
+	label, ok := labelIface.(string)
+	if !ok {
+		return "", &UnmarshalWrongTypeError{i.proxy.Config.HostnameFromLabel, "string", labelIface}
+	}
+
+	return label, nil
+}
+
+func (i *createContainerInterceptor) addWeaveWaitVolume(hostConfig map[string]interface{}) error {
+	configBinds, err := lookupStringArray(hostConfig, "Binds")
+	if err != nil {
+		return err
+	}
+
 	var binds []string
-	for _, bind := range hostConfig.Binds {
+	for _, bind := range configBinds {
 		s := strings.Split(bind, ":")
 		if len(s) >= 2 && s[1] == "/w" {
 			continue
 		}
 		binds = append(binds, bind)
 	}
-	hostConfig.Binds = append(binds, fmt.Sprintf("%s:/w:ro", i.proxy.weaveWaitVolume))
+	hostConfig["Binds"] = append(binds, fmt.Sprintf("%s:/w:ro", i.proxy.weaveWaitVolume))
+	return nil
 }
 
-func (i *createContainerInterceptor) setWeaveWaitEntrypoint(container *docker.Config) error {
-	if len(container.Entrypoint) == 0 {
-		image, err := i.proxy.client.InspectImage(container.Image)
+func (i *createContainerInterceptor) setWeaveWaitEntrypoint(container map[string]interface{}) error {
+	var entrypoint []string
+	if e, ok := container["Entrypoint"]; ok && e != nil {
+		switch e := e.(type) {
+		case string:
+			entrypoint = []string{e}
+		case []string:
+			entrypoint = e
+		case []interface{}:
+			for _, s := range e {
+				if s, ok := s.(string); ok {
+					entrypoint = append(entrypoint, s)
+				} else {
+					return &UnmarshalWrongTypeError{"Entrypoint", "string or array of strings", e}
+				}
+			}
+		default:
+			return &UnmarshalWrongTypeError{"Entrypoint", "string or array of strings", e}
+		}
+	}
+
+	cmd, err := lookupStringArray(container, "Cmd")
+	if err != nil {
+		return err
+	}
+
+	if len(entrypoint) == 0 {
+		containerImage, err := lookupString(container, "Image")
+		if err != nil {
+			return err
+		}
+
+		image, err := i.proxy.client.InspectImage(containerImage)
 		if err == docker.ErrNoSuchImage {
-			return &ErrNoSuchImage{container.Image}
+			return &ErrNoSuchImage{containerImage}
 		} else if err != nil {
 			return err
 		}
 
-		if len(container.Cmd) == 0 {
-			container.Cmd = image.Config.Cmd
+		if len(cmd) == 0 {
+			cmd = image.Config.Cmd
+			container["Cmd"] = cmd
 		}
 
-		if container.Entrypoint == nil {
-			container.Entrypoint = image.Config.Entrypoint
+		if entrypoint == nil {
+			entrypoint = image.Config.Entrypoint
+			container["Entrypoint"] = entrypoint
 		}
 	}
 
-	if len(container.Entrypoint) == 0 && len(container.Cmd) == 0 {
+	if len(entrypoint) == 0 && len(cmd) == 0 {
 		return ErrNoCommandSpecified
 	}
 
-	if len(container.Entrypoint) == 0 || container.Entrypoint[0] != weaveWaitEntrypoint[0] {
-		container.Entrypoint = append(weaveWaitEntrypoint, container.Entrypoint...)
+	if len(entrypoint) == 0 || entrypoint[0] != weaveWaitEntrypoint[0] {
+		container["Entrypoint"] = append(weaveWaitEntrypoint, entrypoint...)
 	}
 
 	return nil
 }
 
-func (i *createContainerInterceptor) setWeaveDNS(container *createContainerRequestBody, name string) error {
+func (i *createContainerInterceptor) setWeaveDNS(container map[string]interface{}, name string) error {
 	if i.proxy.WithoutDNS {
 		return nil
 	}
@@ -127,24 +200,42 @@ func (i *createContainerInterceptor) setWeaveDNS(container *createContainerReque
 		return nil
 	}
 
-	container.HostConfig.DNS = append(container.HostConfig.DNS, i.proxy.dockerBridgeIP)
+	hostConfig, err := lookupObject(container, "HostConfig")
+	if err != nil {
+		return err
+	}
+	dns, err := lookupStringArray(hostConfig, "Dns")
+	if err != nil {
+		return err
+	}
+	hostConfig["Dns"] = append(dns, i.proxy.dockerBridgeIP)
 
-	if container.Hostname == "" && name != "" {
+	hostname, err := lookupString(container, "Hostname")
+	if err != nil {
+		return err
+	}
+
+	if hostname == "" && name != "" {
 		// Strip trailing period because it's unusual to see it used on the end of a host name
 		trimmedDNSDomain := strings.TrimSuffix(dnsDomain, ".")
 		if len(name)+1+len(trimmedDNSDomain) > MaxDockerHostname {
 			Log.Warningf("Container name [%s] too long to be used as hostname", name)
 		} else {
-			container.Hostname = name
-			container.Domainname = trimmedDNSDomain
+			hostname = name
+			container["Hostname"] = name
+			container["Domainname"] = trimmedDNSDomain
 		}
 	}
 
-	if len(container.HostConfig.DNSSearch) == 0 {
-		if container.Hostname == "" {
-			container.HostConfig.DNSSearch = []string{dnsDomain}
+	dnsSearch, err := lookupStringArray(hostConfig, "DnsSearch")
+	if err != nil {
+		return err
+	}
+	if len(dnsSearch) == 0 {
+		if hostname == "" {
+			hostConfig["DnsSearch"] = []string{dnsDomain}
 		} else {
-			container.HostConfig.DNSSearch = []string{"."}
+			hostConfig["DnsSearch"] = []string{"."}
 		}
 	}
 
