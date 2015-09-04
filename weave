@@ -736,7 +736,7 @@ echo_addresses() {
     echo $1 $2 $3
 }
 
-echo_just_ips() {
+echo_cidrs() {
     echo $3
 }
 
@@ -1506,7 +1506,7 @@ case "$COMMAND" in
         ;;
     restart)
         [ $# -ge 1 ] || usage
-        ALL_CIDRS=$(with_container_addresses echo_just_ips $1)
+        ALL_CIDRS=$(with_container_addresses echo_cidrs $1)
         RES=$(docker restart "$1")
         CONTAINER=$(container_id $1)
         for CIDR in $ALL_CIDRS ; do
