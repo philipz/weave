@@ -3,11 +3,13 @@ set -e
 
 [ -n "$WEAVE_DEBUG" ] && set -x
 
+ARM_ARCH=$(echo $(uname -a)  | cut -s -d':' -f3 | cut -s -d' ' -f4)
 SCRIPT_VERSION="(unreleased version)"
-if [ "$SCRIPT_VERSION" = "(unreleased version)" ] ; then
-    IMAGE_VERSION=latest
+if [ "$SCRIPT_VERSION" = "(unreleased version)" ] && [ "$ARM_ARCH" = "armv6l" ] ; then
+    IMAGE_VERSION=v6
 else
-    IMAGE_VERSION=$SCRIPT_VERSION
+    #IMAGE_VERSION=$SCRIPT_VERSION
+    IMAGE_VERSION=latest
 fi
 IMAGE_VERSION=${VERSION:-$IMAGE_VERSION}
 
