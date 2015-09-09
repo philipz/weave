@@ -6,7 +6,7 @@ PUBLISH=publish_weave publish_weaveexec
 # If you can use docker without being root, you can do "make SUDO="
 SUDO=sudo
 
-DOCKERHUB_USER=weaveworks
+DOCKERHUB_USER=philipz
 WEAVE_VERSION=git-$(shell git rev-parse --short=12 HEAD)
 
 WEAVER_EXE=prog/weaver/weaver
@@ -32,9 +32,9 @@ IMAGES=$(WEAVER_IMAGE) $(WEAVEEXEC_IMAGE)
 
 WEAVE_EXPORT=weave.tar
 
-WEAVEEXEC_DOCKER_VERSION=1.3.1
+WEAVEEXEC_DOCKER_VERSION=1.5.0
 DOCKER_DISTRIB=prog/weaveexec/docker-$(WEAVEEXEC_DOCKER_VERSION).tgz
-DOCKER_DISTRIB_URL=https://get.docker.com/builds/Linux/x86_64/docker-$(WEAVEEXEC_DOCKER_VERSION).tgz
+DOCKER_DISTRIB_URL=https://github.com/philipz/weave/releases/download/latest_release/docker-$(WEAVEEXEC_DOCKER_VERSION).tgz
 NETGO_CHECK=@strings $@ | grep cgo_stub\\\.go >/dev/null || { \
 	rm $@; \
 	echo "\nYour go standard library was built without the 'netgo' build tag."; \
@@ -103,7 +103,7 @@ $(WEAVE_EXPORT): $(IMAGES_UPTODATE)
 	$(SUDO) docker save $(addsuffix :latest,$(IMAGES)) > $@
 
 $(DOCKER_DISTRIB):
-	curl -o $(DOCKER_DISTRIB) $(DOCKER_DISTRIB_URL)
+	curl -o $(DOCKER_DISTRIB) -L $(DOCKER_DISTRIB_URL)
 
 tests: $(COVER_EXE)
 	@test/units.sh
