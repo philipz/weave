@@ -7,7 +7,7 @@ PUBLISH=publish_weave publish_weaveexec
 SUDO=sudo
 
 DOCKERHUB_USER=philipz
-WEAVE_VERSION=git-$(shell git rev-parse --short=12 HEAD)
+WEAVE_VERSION=v1.1.0
 
 WEAVER_EXE=prog/weaver/weaver
 WEAVEPROXY_EXE=prog/weaveproxy/weaveproxy
